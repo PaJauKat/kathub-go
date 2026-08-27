@@ -1,0 +1,36 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.test
+*.out
+/bin/
+
+# Wails generated output
+/build/bin/
+/frontend/dist/
+
+# Frontend dependencies and generated files
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+
+# Coverage and profiling
+coverage.out
+coverage.html
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example

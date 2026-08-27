@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "KatHub",
+  "outputfilename": "KatHub",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "PaJauKat",
+    "email": ""
+  },
+  "info": {
+    "companyName": "KatHub",
+    "productName": "KatHub",
+    "productVersion": "1.1.2",
+    "copyright": "Copyright 2026",
+    "comments": "Private Plugin Suite"
+  },
+  "wailsjsdir": "./frontend/src"
+}
