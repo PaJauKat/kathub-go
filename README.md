@@ -48,4 +48,10 @@ wails dev
 wails build -clean -platform windows/amd64 -windowsconsole=false
 ```
 
-El ejecutable resultante estará disponible en `build/bin/KatHub.exe`.
+### Crear Instalador
+Deja el ejecutable en `%LOCALAPPDATA%\KatHub`
+```bash
+.\crearexe.ps1
+```
+
+El ejecutable resultante estará disponible en `build/bin/KatHub.exe` y el instalador en `build/bin/KatHub_Setup.exe`

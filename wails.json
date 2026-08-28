@@ -11,11 +11,14 @@
     "email": ""
   },
   "info": {
-    "companyName": "KatHub",
+    "companyName": "JauKat",
     "productName": "KatHub",
     "productVersion": "1.1.2",
     "copyright": "Copyright 2026",
     "comments": "Private Plugin Suite"
   },
-  "wailsjsdir": "./frontend/src"
+  "wailsjsdir": "./frontend/src",
+  "scripts": {
+    "crearexe": "powershell -Command \"& 'C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe' installer.iss\""
+  }
 }

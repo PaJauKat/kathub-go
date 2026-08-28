@@ -19,7 +19,7 @@ import (
 const (
 	CurrentAppVersion = "1.1.2"
 	RepoOwner         = "PaJauKat"
-	RepoName          = "KatHub"
+	RepoName          = "kathub-go"
 )
 
 type UpdateInfo struct {
