@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
+)
 
-	"github.com/pkg/xattr"
+const (
+	loaderDownloadURL = "https://bucket.pajau.cl/katloader.jar"
 )
 
 type LoaderState int
@@ -29,24 +32,26 @@ type LoaderResult struct {
 func CheckLoader() (LoaderState, error) {
 	runeliteDir, _, _ := getRuneLiteDirs()
 	loaderPath := filepath.Join(runeliteDir, loaderFileName)
-	_, err := os.Stat(loaderPath)
-	if os.IsNotExist(err) {
+	if _, err := os.Stat(loaderPath); os.IsNotExist(err) {
 		return LoaderFileNotFound, nil
 	}
-	verByte, err := xattr.Get(loaderPath, "kversion")
+
+	verByte, err := os.ReadFile(loaderPath + ":kversion")
 	if err != nil {
 		return CantReadVersion, err
 	}
 
 	localLoaderVersion, err := strconv.Atoi(string(verByte))
 	if err != nil {
-		return CantReadOnlineVersion, err
+		return CantReadVersion, err
 	}
 
-	resp, err := http.Head("https://bucket.pajau.cl/katloader.jar")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Head(loaderDownloadURL)
 	if err != nil {
 		return CantReadOnlineVersion, err
 	}
+	defer resp.Body.Close()
 
 	onlineLoaderVersionString := resp.Header.Get("x-version")
 	if onlineLoaderVersionString == "" {
@@ -60,9 +65,7 @@ func CheckLoader() (LoaderState, error) {
 
 	if localLoaderVersion < onlineLoaderVersion {
 		return LoaderNeedsUpdate, nil
-	} else {
-		return LoaderUpToDate, nil
 	}
 
+	return LoaderUpToDate, nil
 }
-

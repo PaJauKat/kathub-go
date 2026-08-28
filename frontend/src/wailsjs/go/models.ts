@@ -64,6 +64,7 @@ export namespace updater {
 	    updateAvailable: boolean;
 	    downloadUrl: string;
 	    releaseUrl: string;
+	    releaseNotes: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
@@ -76,6 +77,7 @@ export namespace updater {
 	        this.updateAvailable = source["updateAvailable"];
 	        this.downloadUrl = source["downloadUrl"];
 	        this.releaseUrl = source["releaseUrl"];
+	        this.releaseNotes = source["releaseNotes"];
 	    }
 	}
 

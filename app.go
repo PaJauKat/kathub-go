@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,52 +41,31 @@ func (a *App) GetKatPluginsState() katplugins.KatPluginsInfo {
 
 // HandleKatPluginsMainAction handles main action button click depending on current state
 func (a *App) HandleKatPluginsMainAction() (bool, error) {
+	var err error
 	stateInfo := katplugins.CalculateKatPluginsState()
-
 	switch stateInfo.State {
-	case katplugins.StateCrackear:
-		ok, err := katplugins.ExecuteCrackearRunelite(true)
-		if !ok || err != nil {
-			return false, fmt.Errorf("failed to crack runelite: %v", err)
-		}
-		// Continue directly to install
-		return katplugins.ExecuteInstallOrUpdateJar(a.ctx)
-
-	case katplugins.StateUpdateLoader:
-		err := katplugins.InstalarTodo(a.ctx)
-		if err != nil{
-			return false, err
-		}
-		return true, nil
-
-	case katplugins.StateInstall, katplugins.StateUpdatePlugins:
-		return katplugins.ExecuteInstallOrUpdateJar(a.ctx)
-
 	case katplugins.StateUpToDate:
-		_, _ = katplugins.ExecuteUninstallJar()
-		return katplugins.ExecuteCrackearRunelite(false)
-
+		err = katplugins.DesinstalarTodo()
 	case katplugins.StateMultipleVersions:
-		_, _ = katplugins.ExecuteUninstallJar()
-		return katplugins.ExecuteInstallOrUpdateJar(a.ctx)
-
+		_, _ = katplugins.DeletePluginJars()
+		err = katplugins.InstalarTodo(a.ctx)
 	default:
-		return false, errors.New("unknown action state")
+		err = katplugins.InstalarTodo(a.ctx)
 	}
+
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+
 }
 
 // UninstallKatPlugins removes jars and un-hijacks runelite config
 func (a *App) UninstallKatPlugins() (bool, error) {
-	ok, err := katplugins.ExecuteUninstallJar()
-	if !ok || err != nil {
-		return false, fmt.Errorf("error uninstalling jar: %v", err)
+	err := katplugins.DesinstalarTodo()
+	if err != nil {
+		return false, err
 	}
-
-	ok, err = katplugins.ExecuteCrackearRunelite(false)
-	if !ok || err != nil {
-		return false, fmt.Errorf("error restoring config: %v", err)
-	}
-
 	return true, nil
 }
 
@@ -222,9 +200,9 @@ func (a *App) CheckForUpdates() (updater.UpdateInfo, error) {
 	return updater.CheckForAppUpdates()
 }
 
-// DownloadAndApplyUpdate triggers app update download
+// DownloadAndApplyUpdate triggers seamless background update and app restart
 func (a *App) DownloadAndApplyUpdate(downloadURL string) error {
-	return updater.DownloadAndApplyUpdate(downloadURL)
+	return updater.ApplySeamlessUpdate(downloadURL)
 }
 
 // ShowDialog helper for native dialogs if needed

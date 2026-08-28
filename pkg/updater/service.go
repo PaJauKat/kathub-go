@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -21,11 +23,12 @@ const (
 )
 
 type UpdateInfo struct {
-	CurrentVersion   string `json:"currentVersion"`
-	LatestVersion    string `json:"latestVersion"`
-	UpdateAvailable  bool   `json:"updateAvailable"`
-	DownloadURL      string `json:"downloadUrl"`
-	ReleaseURL       string `json:"releaseUrl"`
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+	DownloadURL     string `json:"downloadUrl"`
+	ReleaseURL      string `json:"releaseUrl"`
+	ReleaseNotes    string `json:"releaseNotes"`
 }
 
 type ReleaseAsset struct {
@@ -36,6 +39,7 @@ type ReleaseAsset struct {
 type ReleaseResponse struct {
 	TagName string         `json:"tag_name"`
 	HTMLURL string         `json:"html_url"`
+	Body    string         `json:"body"`
 	Assets  []ReleaseAsset `json:"assets"`
 }
 
@@ -72,9 +76,12 @@ func CheckForAppUpdates() (UpdateInfo, error) {
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	info.LatestVersion = latestVersion
 	info.ReleaseURL = release.HTMLURL
+	info.ReleaseNotes = release.Body
 
+	// Prioritize .exe, .zip, or standalone setup
 	for _, a := range release.Assets {
-		if strings.HasSuffix(strings.ToLower(a.Name), ".zip") {
+		name := strings.ToLower(a.Name)
+		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".zip") {
 			info.DownloadURL = a.BrowserDownloadURL
 			break
 		}
@@ -88,28 +95,47 @@ func CheckForAppUpdates() (UpdateInfo, error) {
 }
 
 func isVersionNewer(latest, current string) bool {
-	// Simple semver compare
 	latParts := strings.Split(latest, ".")
 	curParts := strings.Split(current, ".")
 
-	for i := 0; i < len(latParts) && i < len(curParts); i++ {
-		if latParts[i] > curParts[i] {
+	maxLen := len(latParts)
+	if len(curParts) > maxLen {
+		maxLen = len(curParts)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var latNum, curNum int
+		if i < len(latParts) {
+			latNum, _ = strconv.Atoi(latParts[i])
+		}
+		if i < len(curParts) {
+			curNum, _ = strconv.Atoi(curParts[i])
+		}
+		if latNum > curNum {
 			return true
-		} else if latParts[i] < curParts[i] {
+		} else if latNum < curNum {
 			return false
 		}
 	}
-	return len(latParts) > len(curParts)
+	return false
 }
 
-func DownloadAndApplyUpdate(downloadURL string) error {
+// ApplySeamlessUpdate downloads update, schedules self-replacement via batch script, and restarts KatHub
+func ApplySeamlessUpdate(downloadURL string) error {
 	if downloadURL == "" {
 		return errors.New("empty download URL")
 	}
 
-	tempZip := filepath.Join(os.TempDir(), "KatHub_Update.zip")
-	tempExtract := filepath.Join(os.TempDir(), "KatHub_Update")
+	currentExe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	currentExe, err = filepath.EvalSymlinks(currentExe)
+	if err != nil {
+		return err
+	}
 
+	tempFile := filepath.Join(os.TempDir(), "KatHub_Update_Download")
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil {
 		return err
@@ -123,10 +149,10 @@ func DownloadAndApplyUpdate(downloadURL string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download error: %d", resp.StatusCode)
+		return fmt.Errorf("download error: HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(tempZip)
+	out, err := os.Create(tempFile)
 	if err != nil {
 		return err
 	}
@@ -136,36 +162,89 @@ func DownloadAndApplyUpdate(downloadURL string) error {
 	}
 	out.Close()
 
-	// Extract zip
-	_ = os.RemoveAll(tempExtract)
-	r, err := zip.OpenReader(tempZip)
+	var newExePath string
+	if strings.HasSuffix(strings.ToLower(downloadURL), ".zip") {
+		zipExtractDir := filepath.Join(os.TempDir(), "KatHub_Update_Extracted")
+		_ = os.RemoveAll(zipExtractDir)
+		if err := unzipFile(tempFile, zipExtractDir); err != nil {
+			return err
+		}
+
+		// Find .exe inside extracted zip
+		foundExe := ""
+		_ = filepath.Walk(zipExtractDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".exe") {
+				foundExe = path
+				return filepath.SkipDir
+			}
+			return nil
+		})
+
+		if foundExe == "" {
+			return errors.New("no executable found in downloaded update archive")
+		}
+		newExePath = foundExe
+	} else {
+		newExePath = tempFile
+	}
+
+	// Create seamless update batch script
+	updaterBat := filepath.Join(os.TempDir(), "kathub_update.bat")
+	pid := os.Getpid()
+
+	batContent := fmt.Sprintf(`@echo off
+timeout /t 1 /nobreak > NUL
+:WAIT_LOOP
+tasklist /fi "PID eq %d" 2>NUL | find "%d" > NUL
+if %%ERRORLEVEL%% == 0 (
+    timeout /t 1 /nobreak > NUL
+    goto WAIT_LOOP
+)
+copy /y "%s" "%s"
+start "" "%s"
+del "%%~f0"
+`, pid, pid, newExePath, currentExe, currentExe)
+
+	if err := os.WriteFile(updaterBat, []byte(batContent), 0755); err != nil {
+		return err
+	}
+
+	// Launch updater script detached without showing command window
+	cmd := exec.Command("cmd.exe", "/c", updaterBat)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	os.Exit(0)
+	return nil
+}
+
+func unzipFile(src, dest string) error {
+	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 
 	for _, f := range r.File {
-		destPath := filepath.Join(tempExtract, f.Name)
+		fpath := filepath.Join(dest, f.Name)
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(destPath, f.Mode())
+			_ = os.MkdirAll(fpath, os.ModePerm)
 			continue
 		}
-
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
 			return err
 		}
-
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
 		rc, err := f.Open()
 		if err != nil {
+			outFile.Close()
 			return err
 		}
-
-		outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			rc.Close()
-			return err
-		}
-
 		_, err = io.Copy(outFile, rc)
 		outFile.Close()
 		rc.Close()
@@ -173,9 +252,5 @@ func DownloadAndApplyUpdate(downloadURL string) error {
 			return err
 		}
 	}
-
-	// In Windows updater fashion, launch installer or open extracted folder
-	_ = exec.Command("cmd", "/c", "start", tempExtract).Start()
-	os.Exit(0)
 	return nil
 }

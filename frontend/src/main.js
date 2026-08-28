@@ -261,17 +261,34 @@ async function handleAccountManagerClick() {
 }
 
 async function handleUpdateClick() {
-    if (currentUpdateInfo && currentUpdateInfo.updateAvailable && currentUpdateInfo.downloadUrl) {
+    if (!currentUpdateInfo || !currentUpdateInfo.updateAvailable) return;
+
+    if (currentUpdateInfo.downloadUrl) {
+        const confirmed = await showCustomModal({
+            title: "Actualización disponible",
+            message: `¿Deseas actualizar KatHub a la versión v${currentUpdateInfo.latestVersion}? La aplicación se descargará, cerrará y reiniciará automáticamente.`,
+            buttons: [
+                { label: "Cancelar", value: false, primary: false },
+                { label: "Actualizar ahora", value: true, primary: true }
+            ]
+        });
+
+        if (!confirmed) return;
+
+        const lblUpdateText = document.getElementById("lblUpdateText");
+        if (lblUpdateText) lblUpdateText.textContent = "Actualizando...";
+
         try {
             await GoApp.downloadAndApplyUpdate(currentUpdateInfo.downloadUrl);
         } catch (err) {
             await showCustomModal({
-                title: "Update Error",
-                message: "No se pudo completar la descarga: " + err,
+                title: "Error de actualización",
+                message: "No se pudo completar la actualización: " + (err.message || err),
                 buttons: [{ label: "OK", value: true, primary: true }]
             });
+            if (lblUpdateText) lblUpdateText.textContent = `Actualizar a v${currentUpdateInfo.latestVersion}`;
         }
-    } else if (currentUpdateInfo && currentUpdateInfo.releaseUrl) {
+    } else if (currentUpdateInfo.releaseUrl) {
         window.open(currentUpdateInfo.releaseUrl, "_blank");
     }
 }
@@ -305,6 +322,7 @@ async function checkAppUpdates() {
 
         const lblVersion = document.getElementById("lblVersion");
         const lblUpdate = document.getElementById("lblUpdate");
+        const lblUpdateText = document.getElementById("lblUpdateText");
 
         if (update && update.currentVersion) {
             lblVersion.textContent = `v${update.currentVersion}`;
@@ -312,7 +330,9 @@ async function checkAppUpdates() {
 
         if (update && update.updateAvailable) {
             lblUpdate.classList.remove("hidden");
-            lblUpdate.textContent = "¡Actualización disponible! (Click aquí)";
+            if (lblUpdateText) {
+                lblUpdateText.textContent = `Actualizar a v${update.latestVersion}`;
+            }
         } else {
             lblUpdate.classList.add("hidden");
         }

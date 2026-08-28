@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	gitHubRepoOwner = "PaJauKat"
-	gitHubRepoName  = "PaJau-plugins"
-	loaderFileName  = "kat.jar"
+	gitHubRepoOwner   = "PaJauKat"
+	gitHubRepoName    = "PaJau-plugins"
+	loaderFileName    = "kat.jar"
+	hijackMainClass   = "cl.pajau.runelite.LauncherHijack"
+	standardMainClass = "net.runelite.launcher.Launcher"
+	runeLiteJarName   = "RuneLite.jar"
 )
 
 type KatPluginsState string
@@ -44,16 +47,6 @@ type KatPluginsInfo struct {
 	UninstallVisible  bool            `json:"uninstallVisible"`
 	CurrentVersion    string          `json:"currentVersion"`
 	LatestVersion     string          `json:"latestVersion"`
-}
-
-type GitHubReleaseAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
-type GitHubRelease struct {
-	TagName string               `json:"tag_name"`
-	Assets  []GitHubReleaseAsset `json:"assets"`
 }
 
 type RuneLiteConfig struct {
@@ -96,7 +89,7 @@ func IsRuneliteCracked() (bool, error) {
 	}
 
 	mainClass, _ := rawMap["mainClass"].(string)
-	if mainClass != "cl.pajau.runelite.LauncherHijack" {
+	if mainClass != hijackMainClass {
 		return false, nil
 	}
 
@@ -113,7 +106,7 @@ func IsRuneliteCracked() (bool, error) {
 			if str == loaderFileName {
 				hasCracker = true
 			}
-			if str == "RuneLite.jar" {
+			if str == runeLiteJarName {
 				hasRuneliteJar = true
 			}
 		}
@@ -122,25 +115,161 @@ func IsRuneliteCracked() (bool, error) {
 	return hasCracker && hasRuneliteJar, nil
 }
 
-func InstalarTodo(ctx context.Context) error{
+// DownloadLatestPlugins handles the download and progress tracking of the latest plugin jar.
+func DownloadLatestPlugins(ctx context.Context, pluginsDir string) error {
+	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create plugins directory: %w", err)
+	}
+
+	version, downloadURL, err := ObtainLastVersionAndAsset()
+	if err != nil || downloadURL == "" {
+		return fmt.Errorf("failed to get latest release asset: %w", err)
+	}
+
+	// Remove old plugins before writing new one to prevent multiple versions
+	if _, err := DeletePluginJars(); err != nil {
+		return fmt.Errorf("failed to clean existing plugin jars: %w", err)
+	}
+
+	jarFileName := filepath.Base(downloadURL)
+	if !strings.HasSuffix(strings.ToLower(jarFileName), ".jar") {
+		jarFileName = fmt.Sprintf("KatPlugins-%s.jar", version)
+	}
+	jarPath := filepath.Join(pluginsDir, jarFileName)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build download request: %w", err)
+	}
+	req.Header.Set("User-Agent", "KatHub")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download plugin: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download status error: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(jarPath)
+	if err != nil {
+		return fmt.Errorf("failed to create plugin file: %w", err)
+	}
+	defer out.Close()
+
+	pw := &progressWriter{
+		ctx:        ctx,
+		totalBytes: resp.ContentLength,
+	}
+
+	if _, err := io.Copy(out, io.TeeReader(resp.Body, pw)); err != nil {
+		return fmt.Errorf("failed while saving plugin jar: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureLoaderConfigured ensures the loader jar is downloaded/updated and config.json is hijacked.
+func EnsureLoaderConfigured(runeliteDir, configFile string) error {
+	loaderState, err := CheckLoader()
+	if loaderState != LoaderUpToDate {
+		destPath := filepath.Join(runeliteDir, loaderFileName)
+		if err := DescargarArchivo(destPath, loaderDownloadURL); err != nil {
+			return fmt.Errorf("failed to download loader: %w", err)
+		}
+	}
+
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		return errors.New("RuneLite config.json not found")
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read RuneLite config: %w", err)
+	}
+
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		rawMap = make(map[string]interface{})
+	}
+
+	rawMap["mainClass"] = hijackMainClass
+
+	var classPathList []string
+	if cp, ok := rawMap["classPath"].([]interface{}); ok {
+		for _, item := range cp {
+			if s, ok := item.(string); ok && s != loaderFileName && s != runeLiteJarName {
+				classPathList = append(classPathList, s)
+			}
+		}
+	}
+
+	// Ensure loader is first, RuneLite.jar is present
+	classPathList = append([]string{loaderFileName, runeLiteJarName}, classPathList...)
+
+	rawMap["classPath"] = classPathList
+
+	outData, err := json.MarshalIndent(rawMap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize RuneLite config: %w", err)
+	}
+
+	if err := os.WriteFile(configFile, outData, 0644); err != nil {
+		return fmt.Errorf("failed to write RuneLite config: %w", err)
+	}
+
+	return nil
+}
+
+// InstalarTodo checks and installs or updates the loader and plugins as needed.
+func InstalarTodo(ctx context.Context) error {
 	runeliteDir, pluginsDir, configFile := getRuneLiteDirs()
 
 	if _, err := os.Stat(runeliteDir); os.IsNotExist(err) {
-		return errors.New("Runelite AppData directory not found. Please install RuneLite first.")
+		return errors.New("RuneLite AppData directory not found. Please install RuneLite first.")
 	}
 
-	//poner Loader
-	//todo: check si es necesario descargar el loader
-	destPath := filepath.Join(runeliteDir, loaderFileName)
-	err := DescargarArchivo(destPath, "http://bucket.pajau.cl/katloader.jar")
-	if err != nil {
+	// 1. Ensure loader and config hijack
+	if err := EnsureLoaderConfigured(runeliteDir, configFile); err != nil {
 		return err
 	}
 
+	// 2. Check plugin status and download only if needed
+	installedVer := ObtainInstalledPluginsVersion()
+	latestVer, _, err := ObtainLastVersionAndAsset()
+	if err != nil {
+		// If obtaining latest fails, attempt download anyway or return error
+		return fmt.Errorf("failed to check latest plugin version: %w", err)
+	}
 
-	//crack config
+	needDownload := false
+	switch {
+	case installedVer == "-1": // No plugins installed
+		needDownload = true
+	case installedVer == "-69": // Multiple versions installed
+		needDownload = true
+	case latestVer != "-1" && CompareVersions(latestVer, installedVer) > 0: // Newer version available
+		needDownload = true
+	}
+
+	if needDownload {
+		if err := DownloadLatestPlugins(ctx, pluginsDir); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func DesinstalarTodo() error {
+	runeliteDir, _, configFile := getRuneLiteDirs()
+
+	// Restore config.json
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		return errors.New("Runelite config.json not found")
+		return errors.New("config.json not found")
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -153,12 +282,27 @@ func InstalarTodo(ctx context.Context) error{
 		rawMap = make(map[string]interface{})
 	}
 
-	rawMap["mainClass"] = "cl.pajau.runelite.LauncherHijack"
+	rawMap["mainClass"] = standardMainClass
 
 	var classPathList []string
+	if cp, ok := rawMap["classPath"].([]interface{}); ok {
+		for _, item := range cp {
+			if s, ok := item.(string); ok && s != loaderFileName {
+				classPathList = append(classPathList, s)
+			}
+		}
+	}
 
-	classPathList = append(classPathList, loaderFileName)
-	classPathList = append(classPathList, "RuneLite.jar")
+	hasRuneliteJar := false
+	for _, s := range classPathList {
+		if s == runeLiteJarName {
+			hasRuneliteJar = true
+			break
+		}
+	}
+	if !hasRuneliteJar {
+		classPathList = append(classPathList, runeLiteJarName)
+	}
 
 	rawMap["classPath"] = classPathList
 
@@ -171,220 +315,20 @@ func InstalarTodo(ctx context.Context) error{
 		return err
 	}
 
-	//poner plugins
-	//todo: ver si es necesario descargar los plugins
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
-		return err
-	}
+	// Remove loader and legacy artifacts
+	_ = os.Remove(filepath.Join(runeliteDir, loaderFileName))
+	_ = os.Remove(filepath.Join(runeliteDir, loaderFileName+":kversion"))
+	_ = os.Remove(filepath.Join(runeliteDir, "EthanVannInstaller.jar"))
 
-	version, downloadURL, err := ObtainLastVersionAndAsset()
-	if err != nil || downloadURL == "" {
-		return fmt.Errorf("failed to get latest release: %w", err)
-	}
-
-	_ = version
-	jarFileName := filepath.Base(downloadURL)
-	if !strings.HasSuffix(jarFileName, ".jar") {
-		jarFileName = fmt.Sprintf("KatPlugins-%s.jar", version)
-	}
-	jarPath := filepath.Join(pluginsDir, jarFileName)
-
-	req, err := http.NewRequest("GET", downloadURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "KatHub")
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download status: %d", resp.StatusCode)
-	}
-
-	out, err := os.Create(jarPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	pw := &progressWriter{
-		ctx:        ctx,
-		totalBytes: resp.ContentLength,
-	}
-
-	if _, err := io.Copy(out, io.TeeReader(resp.Body, pw)); err != nil {
+	// Remove plugins
+	if _, err := DeletePluginJars(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func ExecuteCrackearRunelite(crack bool) (bool, error) {
-	runeliteDir, _, configFile := getRuneLiteDirs()
-
-	if _, err := os.Stat(runeliteDir); os.IsNotExist(err) {
-		return false, errors.New("Runelite directory not found. Please install RuneLite first.")
-	}
-
-	if crack {
-		destPath := filepath.Join(runeliteDir, loaderFileName)
-
-		err := DescargarArchivo(destPath, "http://bucket.pajau.cl/katloader.jar")
-		if err != nil {
-			return false, err
-		}
-
-		if _, err := os.Stat(configFile); os.IsNotExist(err) {
-			return false, errors.New("config.json not found")
-		}
-
-		data, err := os.ReadFile(configFile)
-		if err != nil {
-			return false, err
-		}
-
-		var rawMap map[string]interface{}
-		if err := json.Unmarshal(data, &rawMap); err != nil {
-			rawMap = make(map[string]interface{})
-		}
-
-		rawMap["mainClass"] = "cl.pajau.runelite.LauncherHijack"
-
-		var classPathList []string
-
-		classPathList = append(classPathList, loaderFileName)
-		classPathList = append(classPathList, "RuneLite.jar")
-
-		rawMap["classPath"] = classPathList
-
-		outData, err := json.MarshalIndent(rawMap, "", "  ")
-		if err != nil {
-			return false, err
-		}
-
-		if err := os.WriteFile(configFile, outData, 0644); err != nil {
-			return false, err
-		}
-
-		return true, nil
-	} else {
-		if _, err := os.Stat(configFile); os.IsNotExist(err) {
-			return false, errors.New("config.json not found")
-		}
-
-		data, err := os.ReadFile(configFile)
-		if err != nil {
-			return false, err
-		}
-
-		var rawMap map[string]interface{}
-		if err := json.Unmarshal(data, &rawMap); err != nil {
-			rawMap = make(map[string]interface{})
-		}
-
-		rawMap["mainClass"] = "net.runelite.launcher.Launcher"
-
-		var classPathList []string
-		if cp, ok := rawMap["classPath"].([]interface{}); ok {
-			for _, item := range cp {
-				if s, ok := item.(string); ok && s != loaderFileName {
-					classPathList = append(classPathList, s)
-				}
-			}
-		}
-
-		hasRuneliteJar := false
-		for _, s := range classPathList {
-			if s == "RuneLite.jar" {
-				hasRuneliteJar = true
-			}
-		}
-		if !hasRuneliteJar {
-			classPathList = append(classPathList, "RuneLite.jar")
-		}
-
-		rawMap["classPath"] = classPathList
-
-		outData, err := json.MarshalIndent(rawMap, "", "  ")
-		if err != nil {
-			return false, err
-		}
-
-		if err := os.WriteFile(configFile, outData, 0644); err != nil {
-			return false, err
-		}
-
-		return true, nil
-	}
-}
-
-func ObtainLastVersionAndAsset() (string, string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", gitHubRepoOwner, gitHubRepoName)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "-1", "", err
-	}
-	req.Header.Set("User-Agent", "KatHub")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "-1", "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "-1", "", fmt.Errorf("github api status: %d", resp.StatusCode)
-	}
-
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "-1", "", err
-	}
-
-	version := strings.TrimPrefix(release.TagName, "v")
-	downloadURL := ""
-	for _, a := range release.Assets {
-		if strings.HasSuffix(strings.ToLower(a.Name), ".jar") {
-			downloadURL = a.BrowserDownloadURL
-			break
-		}
-	}
-
-	if downloadURL == "" {
-		return "-1", "", errors.New("no jar asset found")
-	}
-
-	return version, downloadURL, nil
-}
-
-func ObtainInstalledVersion() string {
-	_, pluginsDir, _ := getRuneLiteDirs()
-	matches, err := filepath.Glob(filepath.Join(pluginsDir, "Kat*.jar"))
-	if err != nil || len(matches) == 0 {
-		return "-1"
-	}
-
-	if len(matches) > 1 {
-		return "-69" // Multiple versions indicator
-	}
-
-	base := filepath.Base(matches[0])
-	noExt := strings.TrimSuffix(base, filepath.Ext(base))
-	parts := strings.Split(noExt, "-")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-
-	return "-1"
-}
-
-func ExecuteUninstallJar() (bool, error) {
+func DeletePluginJars() (bool, error) {
 	_, pluginsDir, _ := getRuneLiteDirs()
 	matches, err := filepath.Glob(filepath.Join(pluginsDir, "Kat*.jar"))
 	if err != nil {
@@ -411,59 +355,6 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 		runtime.EventsEmit(pw.ctx, "plugin-install-progress", percentage)
 	}
 	return n, nil
-}
-
-func ExecuteInstallOrUpdateJar(ctx context.Context) (bool, error) {
-	_, pluginsDir, _ := getRuneLiteDirs()
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
-		return false, err
-	}
-
-	version, downloadURL, err := ObtainLastVersionAndAsset()
-	if err != nil || downloadURL == "" {
-		return false, fmt.Errorf("failed to get latest release: %w", err)
-	}
-
-	_ = version
-	jarFileName := filepath.Base(downloadURL)
-	if !strings.HasSuffix(jarFileName, ".jar") {
-		jarFileName = fmt.Sprintf("KatPlugins-%s.jar", version)
-	}
-	jarPath := filepath.Join(pluginsDir, jarFileName)
-
-	req, err := http.NewRequest("GET", downloadURL, nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("User-Agent", "KatHub")
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("download status: %d", resp.StatusCode)
-	}
-
-	out, err := os.Create(jarPath)
-	if err != nil {
-		return false, err
-	}
-	defer out.Close()
-
-	pw := &progressWriter{
-		ctx:        ctx,
-		totalBytes: resp.ContentLength,
-	}
-
-	if _, err := io.Copy(out, io.TeeReader(resp.Body, pw)); err != nil {
-		return false, err
-	}
-
-	return true, nil
 }
 
 func CalculateKatPluginsState() KatPluginsInfo {
@@ -498,7 +389,7 @@ func CalculateKatPluginsState() KatPluginsInfo {
 	}
 
 	latestVer, _, _ := ObtainLastVersionAndAsset()
-	currentVer := ObtainInstalledVersion()
+	currentVer := ObtainInstalledPluginsVersion()
 
 	if currentVer == "-69" {
 		return KatPluginsInfo{
@@ -528,7 +419,7 @@ func CalculateKatPluginsState() KatPluginsInfo {
 		}
 	}
 
-	if latestVer != "-1" && currentVer < latestVer {
+	if latestVer != "-1" && CompareVersions(latestVer, currentVer) > 0 {
 		return KatPluginsInfo{
 			State:             StateUpdatePlugins,
 			StatusText:        fmt.Sprintf("New version available: v%s", latestVer),
