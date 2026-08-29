@@ -16,10 +16,13 @@ import (
 	"time"
 )
 
+var (
+	CurrentAppVersion = "0.0.0"
+)
+
 const (
-	CurrentAppVersion = "1.1.2"
-	RepoOwner         = "PaJauKat"
-	RepoName          = "kathub-go"
+	RepoOwner = "PaJauKat"
+	RepoName  = "kathub-go"
 )
 
 type UpdateInfo struct {
@@ -81,7 +84,8 @@ func CheckForAppUpdates() (UpdateInfo, error) {
 	// Prioritize .exe, .zip, or standalone setup
 	for _, a := range release.Assets {
 		name := strings.ToLower(a.Name)
-		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".zip") {
+		
+		if strings.Contains(name, "kathub.exe") {
 			info.DownloadURL = a.BrowserDownloadURL
 			break
 		}

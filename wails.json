@@ -13,12 +13,9 @@
   "info": {
     "companyName": "JauKat",
     "productName": "KatHub",
-    "productVersion": "1.1.2",
+    "productVersion": "1.1.4",
     "copyright": "Copyright 2026",
-    "comments": "Private Plugin Suite"
+    "comments": "Private Utility Suite"
   },
-  "wailsjsdir": "./frontend/src",
-  "scripts": {
-    "crearexe": "powershell -Command \"& 'C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe' installer.iss\""
-  }
+  "wailsjsdir": "./frontend/src"
 }

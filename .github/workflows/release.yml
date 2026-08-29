@@ -37,13 +37,16 @@ jobs:
 
       - name: Build Installer with Inno Setup
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          $version = (Get-Content wails.json -Raw | ConvertFrom-Json).info.productVersion
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer.iss
         shell: powershell
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/bin/KatHub_Setup.exe
+          files: |
+            build/bin/KatHub_Setup.exe
+            build/bin/KatHub.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

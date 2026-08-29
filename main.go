@@ -2,6 +2,9 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
+
+	"kathub/pkg/updater"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -11,6 +14,22 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed wails.json
+var wailsJSON []byte
+
+type wailsConfig struct {
+	Info struct {
+		ProductVersion string `json:"productVersion"`
+	} `json:"info"`
+}
+
+func init() {
+	var cfg wailsConfig
+	if err := json.Unmarshal(wailsJSON, &cfg); err == nil && cfg.Info.ProductVersion != "" {
+		updater.CurrentAppVersion = cfg.Info.ProductVersion
+	}
+}
 
 func main() {
 	// Create an instance of the app structure

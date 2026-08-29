@@ -1,6 +1,8 @@
 ; Script de Inno Setup para KatHub (Instalador moderno estilo RuneLite/Discord)
 #define MyAppName "KatHub"
-#define MyAppVersion "1.1.2"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "PaJauKat"
 #define MyAppURL "https://github.com/PaJauKat/KatHub"
 #define MyAppExeName "KatHub.exe"
