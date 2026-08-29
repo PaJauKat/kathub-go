@@ -29,6 +29,12 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
+      - name: Prepare Frontend Dist
+        run: |
+          New-Item -ItemType Directory -Force -Path "frontend/dist"
+          Copy-Item -Path "frontend/src/*" -Destination "frontend/dist" -Recurse -Force
+        shell: powershell
+
       - name: Build Wails App
         run: wails build
 
