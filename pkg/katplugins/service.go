@@ -20,6 +20,7 @@ const (
 	gitHubRepoOwner   = "PaJauKat"
 	gitHubRepoName    = "PaJau-plugins"
 	loaderFileName    = "kat.jar"
+	managerFileName   = "KatManager.jar"
 	hijackMainClass   = "cl.pajau.runelite.LauncherHijack"
 	standardMainClass = "net.runelite.launcher.Launcher"
 	runeLiteJarName   = "RuneLite.jar"
@@ -33,6 +34,7 @@ const (
 	StateInstall          KatPluginsState = "Install"
 	StateUpdatePlugins    KatPluginsState = "Update"
 	StateUpdateLoader     KatPluginsState = "UpdateLoader"
+	StateUpdateManager    KatPluginsState = "UpdateManager"
 	StateUpToDate         KatPluginsState = "UpToDate"
 	StateMultipleVersions KatPluginsState = "MultipleVersions"
 )
@@ -56,14 +58,59 @@ type RuneLiteConfig struct {
 	Extra map[string]interface{} `json:"-"`
 }
 
+func getKatPluginDirs() (katDir string, managerDir string, pluginsDir string) {
+	userProfile := os.Getenv("USERPROFILE")
+	katDir = filepath.Join(userProfile, ".runelite", "kat")
+	managerDir = filepath.Join(katDir, "manager")
+	pluginsDir = filepath.Join(katDir, "plugins")
+	return
+}
+
 func getRuneLiteDirs() (runeliteDir string, pluginsDir string, configFile string) {
 	localAppData := os.Getenv("LOCALAPPDATA")
-	userProfile := os.Getenv("USERPROFILE")
 
 	runeliteDir = filepath.Join(localAppData, "RuneLite")
 	configFile = filepath.Join(runeliteDir, "config.json")
-	pluginsDir = filepath.Join(userProfile, ".runelite", "sideloaded-plugins")
+	_, _, pluginsDir = getKatPluginDirs()
 	return
+}
+
+// managerInstalled checks whether the Kat Manager jar is present in the manager
+// directory. The loader (HijackedClientBackup) loads the manager from
+// ~/.runelite/kat/manager/ to show the authentication panel and unlock the plugins.
+func managerInstalled() bool {
+	_, managerDir, _ := getKatPluginDirs()
+	// The Gradle task (KatManagerJar) names the artifact KatManager-<version>.jar,
+	// so accept any KatManager*.jar in the manager directory.
+	matches, err := filepath.Glob(filepath.Join(managerDir, "KatManager*.jar"))
+	return err == nil && len(matches) > 0
+}
+
+// EnsureManagerInstalled downloads the Kat Manager jar into ~/.runelite/kat/manager/
+// when it is not present yet. The manager is what lets users authenticate with
+// Discord from inside RuneLite.
+func EnsureManagerInstalled() error {
+	_, managerDir, _ := getKatPluginDirs()
+	if managerInstalled() {
+		return nil
+	}
+	
+	if err := os.MkdirAll(managerDir, 0755); err != nil {
+		return fmt.Errorf("failed to create manager directory: %w", err)
+	}
+	return DescargarArchivo(filepath.Join(managerDir, managerFileName), managerDownloadURL)
+}
+
+// EnsureManagerUpdated redownloads the Kat Manager jar when the installed version
+// is older than the one served by the download URL.
+func EnsureManagerUpdated() error {
+	state, _ := CheckManager()
+	if state != ManagerNeedsUpdate {
+		return nil
+	}
+	
+	_, managerDir, _ := getKatPluginDirs()
+	return DescargarArchivo(filepath.Join(managerDir, managerFileName), managerDownloadURL)
 }
 
 func IsRuneliteCracked() (bool, error) {
@@ -176,9 +223,16 @@ func DownloadLatestPlugins(ctx context.Context, pluginsDir string) error {
 func EnsureLoaderConfigured(runeliteDir, configFile string) error {
 	loaderState, err := CheckLoader()
 	if loaderState != LoaderUpToDate {
+		if IsRuneLiteRunning() {
+			return errors.New("No se pudo reemplazar kat.jar. Debes cerrar RuneLite antes de continuar.")
+		}
+
 		destPath := filepath.Join(runeliteDir, loaderFileName)
 		if err := DescargarArchivo(destPath, loaderDownloadURL); err != nil {
-			return fmt.Errorf("failed to download loader: %w", err)
+			if IsRuneLiteRunning() || isFileLockOrPermissionError(err) {
+				return errors.New("No se pudo reemplazar kat.jar. Debes cerrar RuneLite antes de continuar.")
+			}
+			return fmt.Errorf("no se pudo reemplazar el archivo kat.jar. Por favor, asegúrate de cerrar RuneLite e inténtalo de nuevo: %w", err)
 		}
 	}
 
@@ -201,7 +255,7 @@ func EnsureLoaderConfigured(runeliteDir, configFile string) error {
 	var classPathList []string
 	if cp, ok := rawMap["classPath"].([]interface{}); ok {
 		for _, item := range cp {
-			if s, ok := item.(string); ok && s != loaderFileName && s != runeLiteJarName {
+			if s, ok := item.(string); ok && s != loaderFileName && s != runeLiteJarName && s != "EthanVannInstaller.jar" {
 				classPathList = append(classPathList, s)
 			}
 		}
@@ -234,6 +288,14 @@ func InstalarTodo(ctx context.Context) error {
 
 	// 1. Ensure loader and config hijack
 	if err := EnsureLoaderConfigured(runeliteDir, configFile); err != nil {
+		return err
+	}
+
+	// 1.5 Ensure the Kat Manager is installed (required by the loader to authenticate)
+	if err := EnsureManagerInstalled(); err != nil {
+		return err
+	}
+	if err := EnsureManagerUpdated(); err != nil {
 		return err
 	}
 
@@ -315,7 +377,7 @@ func DesinstalarTodo() error {
 		return err
 	}
 
-	// Remove loader and legacy artifacts
+	// Remove loader and legacy artifacts (ignore failures if files are in use)
 	_ = os.Remove(filepath.Join(runeliteDir, loaderFileName))
 	_ = os.Remove(filepath.Join(runeliteDir, loaderFileName+":kversion"))
 	_ = os.Remove(filepath.Join(runeliteDir, "EthanVannInstaller.jar"))
@@ -324,6 +386,12 @@ func DesinstalarTodo() error {
 	if _, err := DeletePluginJars(); err != nil {
 		return err
 	}
+
+	// Remove Kat Manager and auth token (~/.runelite/kat tree)
+	katDir, managerDir, _ := getKatPluginDirs()
+	_ = os.RemoveAll(managerDir)
+	_ = os.Remove(filepath.Join(katDir, "token.dat"))
+	_ = os.RemoveAll(katDir)
 
 	return nil
 }
@@ -373,11 +441,40 @@ func CalculateKatPluginsState() KatPluginsInfo {
 		}
 	}
 
+	if !managerInstalled() {
+		return KatPluginsInfo{
+			State:             StateInstall,
+			StatusText:        "Kat Manager not detected",
+			StatusColor:       "#f08080",
+			ButtonText:        "Install",
+			ButtonColor:       "#e63946",
+			MainButtonVisible: true,
+			UninstallVisible:  true,
+			CurrentVersion:    "",
+			LatestVersion:     "",
+		}
+	}
+
 	loaderState, _ := CheckLoader()
 	if loaderState != LoaderUpToDate {
 		return KatPluginsInfo{
 			State:             StateUpdateLoader,
 			StatusText:        "New Loader version available",
+			StatusColor:       "#f08080",
+			ButtonText:        "Update",
+			ButtonColor:       "#e63946",
+			MainButtonVisible: true,
+			UninstallVisible:  true,
+			CurrentVersion:    "",
+			LatestVersion:     "",
+		}
+	}
+
+	managerState, _ := CheckManager()
+	if managerState == ManagerNeedsUpdate {
+		return KatPluginsInfo{
+			State:             StateUpdateManager,
+			StatusText:        "New Kat Manager version available",
 			StatusColor:       "#f08080",
 			ButtonText:        "Update",
 			ButtonColor:       "#e63946",

@@ -177,8 +177,8 @@ async function handleKatPluginsMainAction() {
         }
     } catch (err) {
         await showCustomModal({
-            title: "KatHub Error",
-            message: "Exception: " + (err.message || err),
+            title: "KatHub",
+            message: (err && err.message) ? err.message : String(err),
             buttons: [{ label: "OK", value: true, primary: true }]
         });
     } finally {
@@ -223,7 +223,7 @@ async function handleUninstallKatPlugins() {
     } catch (err) {
         await showCustomModal({
             title: "KatHub",
-            message: "Error: " + err,
+            message: (err && err.message) ? err.message : String(err),
             buttons: [{ label: "OK", value: true, primary: true }]
         });
     } finally {

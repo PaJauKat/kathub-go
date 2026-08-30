@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func ObtainLastVersionAndAsset() (string, string, error) {
 
 func ObtainInstalledPluginsVersion() string {
 	_, pluginsDir, _ := getRuneLiteDirs()
-	matches, err := filepath.Glob(filepath.Join(pluginsDir, "Kat*.jar"))
+	matches, err := filepath.Glob(filepath.Join(pluginsDir, "KatPlugins-*.jar"))
 	if err != nil || len(matches) == 0 {
 		return "-1"
 	}
@@ -72,11 +73,11 @@ func ObtainInstalledPluginsVersion() string {
 		return "-69" // Multiple versions indicator
 	}
 
-	base := filepath.Base(matches[0])
-	noExt := strings.TrimSuffix(base, filepath.Ext(base))
-	parts := strings.Split(noExt, "-")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
+	// The release jar is named KatPlugins-<major>.<minor>.jar (e.g. KatPlugins-2.24.jar)
+	re := regexp.MustCompile(`KatPlugins-(\d+)\.(\d+)\.jar$`)
+	m := re.FindStringSubmatch(filepath.Base(matches[0]))
+	if m != nil {
+		return m[1] + "." + m[2]
 	}
 
 	return "-1"
