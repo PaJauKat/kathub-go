@@ -11,6 +11,7 @@ import (
 const (
 	loaderDownloadURL  = "https://bucket.pajau.cl/katloader.jar"
 	managerDownloadURL = "https://bucket.pajau.cl/katmanager.jar"
+	pluginsDownloadURL = "https://bucket.pajau.cl/katplugins.jar"
 )
 
 type LoaderState int

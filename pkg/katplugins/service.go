@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -17,8 +16,6 @@ import (
 )
 
 const (
-	gitHubRepoOwner   = "PaJauKat"
-	gitHubRepoName    = "PaJau-plugins"
 	loaderFileName    = "kat.jar"
 	managerFileName   = "KatManager.jar"
 	hijackMainClass   = "cl.pajau.runelite.LauncherHijack"
@@ -178,10 +175,9 @@ func DownloadLatestPlugins(ctx context.Context, pluginsDir string) error {
 		return fmt.Errorf("failed to clean existing plugin jars: %w", err)
 	}
 
-	jarFileName := filepath.Base(downloadURL)
-	if !strings.HasSuffix(strings.ToLower(jarFileName), ".jar") {
-		jarFileName = fmt.Sprintf("KatPlugins-%s.jar", version)
-	}
+	// The jar in the bucket is katplugins.jar (object key), but on disk it must
+	// keep the KatPlugins-<major>.<minor>.jar name KatHub and the loader expect.
+	jarFileName := fmt.Sprintf("KatPlugins-%s.jar", version)
 	jarPath := filepath.Join(pluginsDir, jarFileName)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)

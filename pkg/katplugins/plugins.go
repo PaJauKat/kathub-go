@@ -1,7 +1,6 @@
 package katplugins
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,54 +11,30 @@ import (
 	"time"
 )
 
-type GitHubReleaseAsset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
-type GitHubRelease struct {
-	TagName string               `json:"tag_name"`
-	Assets  []GitHubReleaseAsset `json:"assets"`
-}
-
+// ObtainLastVersionAndAsset returns the latest plugin version and its download
+// URL served by the R2 bucket. The version comes from the object metadata
+// (x-amz-meta-version), same as katloader and katmanager.
 func ObtainLastVersionAndAsset() (string, string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", gitHubRepoOwner, gitHubRepoName)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "-1", "", err
-	}
-	req.Header.Set("User-Agent", "KatHub")
-
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Head(pluginsDownloadURL)
 	if err != nil {
 		return "-1", "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "-1", "", fmt.Errorf("github api status: %d", resp.StatusCode)
+		return "-1", "", fmt.Errorf("r2 status: %d", resp.StatusCode)
 	}
 
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "-1", "", err
+	version := resp.Header.Get("x-version")
+	if version == "" {
+		version = resp.Header.Get("x-amz-meta-version")
+	}
+	if version == "" {
+		return "-1", "", errors.New("no version metadata on bucket object")
 	}
 
-	version := strings.TrimPrefix(release.TagName, "v")
-	downloadURL := ""
-	for _, a := range release.Assets {
-		if strings.HasSuffix(strings.ToLower(a.Name), ".jar") {
-			downloadURL = a.BrowserDownloadURL
-			break
-		}
-	}
-
-	if downloadURL == "" {
-		return "-1", "", errors.New("no jar asset found")
-	}
-
-	return version, downloadURL, nil
+	return strings.TrimPrefix(version, "v"), pluginsDownloadURL, nil
 }
 
 func ObtainInstalledPluginsVersion() string {

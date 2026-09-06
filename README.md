@@ -54,4 +54,10 @@ Deja el ejecutable en `%LOCALAPPDATA%\KatHub`
 .\crearexe.ps1
 ```
 
+### Subir nueva version 
+```
+git tag vX.X.X
+git push origin vX.X.X
+```
+
 El ejecutable resultante estará disponible en `build/bin/KatHub.exe` y el instalador en `build/bin/KatHub_Setup.exe`
